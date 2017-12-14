@@ -1,37 +1,38 @@
 #include <SFML/Graphics.hpp>
+#include <entt/entity/registry.hpp>
 #include <cstdlib>
-#include <entityx/entityx.h>
+#include <iostream>
 #include <sstream>
-
-namespace ex = entityx;
 
 inline float r(int a, float b = 0) { return static_cast<float>(std::rand() % (a * 1000) + b * 1000) / 1000.0; }
 
 ////////////////////////////////////////////////////////////////
 
 struct Body {
-  Body(const sf::Vector2f& position, const sf::Vector2f& direction) : position(position), direction(direction) {}
+  Body(const sf::Vector2f& position, const sf::Vector2f& direction)
+    : position(position), direction(direction)
+  {}
 
   sf::Vector2f position;
   sf::Vector2f direction;
 };
 
-struct BodySystem : public ex::System<BodySystem> {
-  void update(ex::EntityManager& es, ex::EventManager& events, ex::TimeDelta dt) override
+struct BodySystem {
+  void update(entt::DefaultRegistry &registry, double dt)
   {
     const auto fdt = static_cast<float>(dt);
-    es.each<Body>([fdt](ex::Entity entity, Body& body) { body.position += body.direction * fdt; });
+    registry.view<Body>().each([fdt](auto entity, auto& body) { body.position += body.direction * fdt; });
   };
 };
 
-class BounceSystem : public ex::System<BounceSystem>
+class BounceSystem
 {
 public:
   explicit BounceSystem(sf::Vector2u size) : size(size) {}
 
-  void update(ex::EntityManager& es, ex::EventManager& events, ex::TimeDelta dt) override
+  void update(entt::DefaultRegistry &registry, double dt)
   {
-    es.each<Body>([this](ex::Entity entity, Body& body) {
+    registry.view<Body>().each([this](auto entity, auto& body) {
       if (body.position.x + body.direction.x < 0 || body.position.x + body.direction.x >= size.x) {
         body.direction.x = -body.direction.x;
       }
@@ -49,7 +50,7 @@ private:
 
 using Renderable = std::shared_ptr<sf::Shape>;
 
-class RenderSystem : public ex::System<RenderSystem>
+class RenderSystem
 {
 public:
   explicit RenderSystem(sf::RenderTarget& target, sf::Font& font) : target(target)
@@ -58,18 +59,20 @@ public:
     text.setPosition(sf::Vector2f(32, 2));
   }
 
-  void update(ex::EntityManager& es, ex::EventManager& events, ex::TimeDelta dt) override
+  void update(entt::DefaultRegistry &registry, double dt)
   {
-    es.each<Body, Renderable>([this](ex::Entity entity, Body& body, Renderable& renderable) {
+    int count = 0;
+    registry.view<Body, Renderable>().each([this, &count](auto entity, auto& body, auto& renderable) {
       renderable->setPosition(body.position);
       target.draw(*renderable);
+      ++count;
     });
 
-    print_fps(dt, es.size());
+    print_fps(dt, count);
   }
 
 private:
-  void print_fps(ex::TimeDelta dt, size_t nb_entities)
+  void print_fps(double dt, size_t nb_entities)
   {
     last_update += dt;
     ++frame_count;
@@ -94,33 +97,39 @@ private:
 
 ////////////////////////////////////////////////////////////////
 
-class GameEngine : public ex::EntityX
+class GameEngine
 {
+  entt::DefaultRegistry registry;
+  BodySystem body_system;
+  BounceSystem bounce_system;
+  RenderSystem render_system;
+
 public:
   GameEngine(sf::RenderTarget& target, sf::Font& font)
-  {
-    systems.add<BodySystem>();
-    systems.add<BounceSystem>(target.getSize());
-    systems.add<RenderSystem>(target, font);
-    systems.configure();
+    : bounce_system(target.getSize()), render_system(target, font)
+  {}
+
+  void update(double dt) {
+    body_system.update(registry, dt);
+    bounce_system.update(registry, dt);
+    render_system.update(registry, dt);
   }
 
-  void update(ex::TimeDelta dt) { systems.update_all(dt); }
+  void create_bodies(sf::Vector2u size, int count)
+  {
+    for (int i = 0; i < count; i++) {
+      auto entity = registry.create();
+
+      registry.assign<Body>(entity, sf::Vector2f(r(size.x), r(size.y)), sf::Vector2f(r(200, -200), r(200, -200)));
+
+      Renderable shape(new sf::CircleShape(20));
+      shape->setOrigin(10, 10);
+      shape->setFillColor(sf::Color(r(128, 127), r(128, 127), r(128, 127)));
+      registry.assign<Renderable>(entity, shape);
+    }
+  }
 };
 
-void create_bodies(ex::EntityManager& es, sf::Vector2u size, int count)
-{
-  for (int i = 0; i < count; i++) {
-    ex::Entity entity = es.create();
-
-    entity.assign<Body>(sf::Vector2f(r(size.x), r(size.y)), sf::Vector2f(r(200, -200), r(200, -200)));
-
-    Renderable shape(new sf::CircleShape(20));
-    shape->setOrigin(10, 10);
-    shape->setFillColor(sf::Color(r(128, 127), r(128, 127), r(128, 127)));
-    entity.assign<Renderable>(shape);
-  }
-}
 
 ////////////////////////////////////////////////////////////////
 
@@ -138,8 +147,7 @@ int main()
   window.setVerticalSyncEnabled(true);
 
   GameEngine engine(window, font);
-
-  create_bodies(engine.entities, window.getSize(), 100);
+  engine.create_bodies(window.getSize(), 100);
 
   sf::Clock clock;
   while (window.isOpen()) {
